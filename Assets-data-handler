@@ -263,8 +263,23 @@ function actionAssetsQuery(qs, body){
   var orderBy  = body.orderBy || "modifiedDate";
   var orderDir = body.orderDir || "DESC";
 
-  var result = queryAssets(token, {
-    page: page,
+  // Base: images only (match both API name + display label to avoid case mismatches)
+  var root = OR(
+    cond("assetType.displayName","equals","Image"),
+    cond("assetType.name","equals","image")
+  );
+
+  // Optional: folder filter
+  if (catId !== null){ root = AND(root, cond("category.id","equals", String(catId))); }
+
+  // Optional: search in name OR description
+  if (search && search.length){
+    var like = "%" + search + "%";
+    root = AND(root, OR(cond("name","like", like), cond("description","like", like)));
+  }
+
+  var payload = {
+    page    : page,
     pageSize: pageSize,
     categoryId: catId,
     searchText: search,
@@ -305,11 +320,17 @@ function actionList(qs){
     allowFallback: true
   });
 
-  var out = [];
-  for (var i=0;i<result.items.length;i++){
-    var item = result.items[i];
-    out.push({ name:item.name || "", url:item.url || "", thumbnail:item.thumbnail || item.url || "" });
-  }
+  var payload = {
+    page:1, pageSize:50,
+    query: AND(
+      OR(
+        cond("assetType.displayName","equals","Image"),
+        cond("assetType.name","equals","image")
+      ),
+      OR(cond("name","like","%" + term + "%"), cond("description","like","%" + term + "%"))
+    ),
+    sort:[{ Property:"modifiedDate", Direction:"DESC" }]
+  };
 
   respond({
     ok:true,

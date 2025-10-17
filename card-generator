@@ -1106,23 +1106,14 @@ async function searchLibrary(term){
       return { items: [], markup: '<span class="library-message">No results.</span>' };
     }
 
-    const fallbackUsed = data?.fallbackUsed === true;
-    return {
-      items,
-      markup: buildLibraryCarouselMarkup(items, { term: safeTerm, fallbackUsed })
-    };
+    return { items, markup: buildLibraryCarouselMarkup(items) };
   }catch(e){
     console.error(e);
     return { items: [], markup: '<span class="library-message">Error loading library.</span>' };
   }
 }
 
-function buildLibraryCarouselMarkup(items, opts={}){
-  const term = opts.term || '';
-  const fallbackUsed = opts.fallbackUsed === true;
-  const messages = [];
-  if (term) messages.push(`Results for “${escapeHtml(term)}”`);
-  if (fallbackUsed) messages.push('Showing available image results');
+function buildLibraryCarouselMarkup(items){
   const cards = items.map(item=>`
     <button type="button" class="library-card" data-pick-src="${escapeHtml(item.url)}">
       <span class="library-card__thumb">
@@ -1131,10 +1122,7 @@ function buildLibraryCarouselMarkup(items, opts={}){
       <span class="library-card__name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
     </button>`).join('');
 
-  const messageHtml = messages.length ? `<span class="library-message">${messages.join(' • ')}</span>` : '';
-
   return `
-    ${messageHtml}
     <div class="library-carousel" data-count="${items.length}">
       <button type="button" class="carousel-nav prev" aria-label="Scroll left"><i class="fa-solid fa-chevron-left"></i></button>
       <div class="library-carousel__viewport">

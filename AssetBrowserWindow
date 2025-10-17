@@ -367,20 +367,12 @@ endif
         if (!res.ok) throw new Error('assets');
         const data = await res.json();
         const items = Array.isArray(data?.items) ? data.items : [];
-        const actualPage = parseInt(data?.actualPage, 10);
-        if (Number.isFinite(actualPage) && actualPage > 0 && actualPage !== state.page){
-          state.page = actualPage;
-        }
-        const actualPageSize = parseInt(data?.actualPageSize, 10);
-        if (Number.isFinite(actualPageSize) && actualPageSize > 0){
-          state.pageSize = actualPageSize;
-        }
         if (state.page > 1 && items.length === 0){
           state.page--;
           return loadAssets();
         }
         state.lastItems = items.length;
-        renderAssets(items, data?.fallbackUsed === true);
+        renderAssets(items);
       }catch(e){
         console.error(e);
         state.lastItems = 0;
@@ -390,7 +382,7 @@ endif
       }
     }
 
-    function renderAssets(items, fallbackUsed){
+    function renderAssets(items){
       if (!items.length){
         els.grid.innerHTML = '<div class="muted">No assets match your filters.</div>';
         els.status.textContent = buildStatusText(0);
@@ -418,11 +410,7 @@ endif
           postSelection(asset);
         });
       });
-      let status = buildStatusText(items.length);
-      if (fallbackUsed){
-        status += ' • Showing available image results';
-      }
-      els.status.textContent = status;
+      els.status.textContent = buildStatusText(items.length);
       updateControls(false);
     }
 
