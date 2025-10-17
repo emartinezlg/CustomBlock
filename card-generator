@@ -118,6 +118,22 @@ endif
   .btn-accent{background:var(--pri)!important;color:#fff!important;border-color:transparent!important}
   .accent{color:var(--pri)}
 
+  .library-results{min-height:72px;color:#0b2a3b;font-size:12px}
+  .library-results .library-message{display:block;padding:6px 0;opacity:.7}
+  .library-carousel{display:flex;align-items:center;gap:8px;padding:4px 0}
+  .library-carousel.is-nav-hidden .carousel-nav{visibility:hidden}
+  .library-carousel__viewport{flex:1;overflow:hidden;max-width:480px}
+  .library-carousel__track{display:flex;gap:10px;transition:transform .3s ease}
+  .library-card{background:#fff;border:1px solid #cfe6f3;border-radius:10px;min-width:140px;max-width:160px;flex:0 0 140px;padding:8px;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;transition:border-color .2s,box-shadow .2s}
+  .library-card:focus-visible,.library-card:hover{border-color:#005F9A;box-shadow:0 0 0 2px rgba(0,95,154,.2)}
+  .library-card__thumb{width:100%;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#f3f8fb;display:flex;align-items:center;justify-content:center}
+  .library-card__thumb img{width:100%;height:100%;object-fit:cover}
+  .library-card__name{font-size:12px;text-align:center;color:#0b2a3b;word-break:break-word}
+  .carousel-nav{border:1px solid #cfe6f3;background:#fff;color:#005F9A;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .2s,color .2s}
+  .carousel-nav:hover,.carousel-nav:focus-visible{background:#005F9A;color:#fff}
+  .carousel-nav[disabled]{opacity:.4;cursor:not-allowed}
+  .library-query{flex:1;min-width:0}
+
   .field{display:grid;gap:6px;margin-bottom:10px}
   .field label{font-size:12px;color:#0b2a3b}
   input[type="text"],input[type="url"],textarea,select{
@@ -132,20 +148,7 @@ endif
   .color-row{ display:flex; align-items:center; gap:8px; margin-bottom: 6px; } #colorInput{ flex: 1; padding: 6px 8px; border:1px solid #cfe6f3; border-radius: 8px; font: inherit; } 
   .color-preview{ width: 26px; height: 26px; border:1px solid #cfe6f3; border-radius: 6px; background: #7D7E7F; }
   .color-actions{ display:flex; gap:8px; justify-content:flex-end; }
-  /* Asset browser modal (lightweight) */
-.asset-modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:99999}
-.asset-modal > .box{background:#fff;border-radius:12px;max-width:720px;width:96%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;border:1px solid #cfe6f3}
-.asset-modal header{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #e5eff7}
-.asset-modal .body{display:grid;grid-template-columns:220px 1fr;gap:0;min-height:360px}
-.asset-modal .side{border-right:1px solid #e5eff7;padding:10px}
-.asset-modal .main{padding:10px;display:flex;flex-direction:column;gap:10px}
-.asset-modal .folder{display:flex;align-items:center;gap:8px;padding:6px;border-radius:8px;cursor:pointer}
-.asset-modal .folder:hover{background:#f3f8fb}
-.asset-modal .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.asset-modal .tile{border:1px solid #e5eff7;border-radius:8px;padding:8px;display:flex;gap:8px;align-items:center}
-.asset-modal .tile img{width:48px;height:48px;object-fit:cover;border-radius:6px}
-.asset-modal .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.asset-modal .push{margin-left:auto}
+
 
 </style>
 
@@ -206,7 +209,7 @@ endif
 <div id="hdrLibRow" class="field" hidden>
   <label>Search library</label>
   <div class="toolbar">
-    <input type="text" id="hdrLibQuery" placeholder="Search term…" />
+    <input type="text" id="hdrLibQuery" class="library-query" placeholder="Search term…" hidden />
     <button id="hdrLibSearch" class="btn icon" title="Search">
       <i class="fa-solid fa-magnifying-glass"></i>
     </button>
@@ -215,7 +218,7 @@ endif
       <i class="fa-regular fa-folder-open"></i> Browse
     </button>
   </div>
-  <div id="hdrLibResults" class="muted"></div>
+  <div id="hdrLibResults" class="library-results"></div>
 </div>
 
 </div>
@@ -309,8 +312,13 @@ const FOOTER_TOKEN = '%' + '%=ContentBlockByKey("CUSTOMER_KEY")=%' + '%';
 const ASSETS = {
   list   : 'https://cloud.info.stib-mivb.brussels/Assets-data-handler?action=list',        // simple text search
   folders: 'https://cloud.info.stib-mivb.brussels/Assets-data-handler?action=folders',     // folder tree
-  query  : 'https://cloud.info.stib-mivb.brussels/Assets-data-handler?action=assetsQuery'  // filter/sort/paginate
+  query  : 'https://cloud.info.stib-mivb.brussels/Assets-data-handler?action=assetsQuery', // filter/sort/paginate
+  browserPage: 'https://cloud.info.stib-mivb.brussels/AssetBrowserWindow'                 // standalone browser UI
 };
+
+const BROWSER_URL = (()=>{ try{ return new URL(ASSETS.browserPage); }catch(e){ return null; } })();
+const BROWSER_ORIGIN = BROWSER_URL ? BROWSER_URL.origin : null;
+let browseWindow = null;
 
 // Utilities
 const $$   = s => document.querySelector(s);
@@ -322,6 +330,11 @@ const setVis = (id, visible) => { const el = typeof id==='string' ? $$('#'+id) :
 // Block SDK
 let sdk;
 try{ sdk = new window.sfdc.BlockSDK({ tabs: [] }); }catch(e){ console.warn('BlockSDK not found; preview-only mode.'); }
+
+if (!window.__assetBrowserMessageBound){
+  window.addEventListener('message', handleAssetBrowserMessage);
+  window.__assetBrowserMessageBound = true;
+}
 
 /** ===========================
  *  DATA MODEL
@@ -513,7 +526,6 @@ function attachRenameUI(sectionId, b){
       state.selectedIndex = -1;   // do NOT auto-open properties
       renderAll();
       patchImageSourceSelect();   // ensure options/labels are correct & upload removed
-      ensureAssetBrowserUi();     // inject modal + browse button
     });
   } else {
     state.blocks = [ JSON.parse(JSON.stringify(DEFAULTS.header)) ];
@@ -521,7 +533,6 @@ function attachRenameUI(sectionId, b){
     state.selectedIndex = -1;
     renderAll();
     patchImageSourceSelect();
-    ensureAssetBrowserUi();
   }
 
   // Adders
@@ -699,26 +710,16 @@ function renderProps(){
 
       // Library quick search
       const libBtn = $$('#hdrLibSearch');
-      if (libBtn){
-        libBtn.onclick = async ()=>{
-          const term = $$('#hdrLibQuery')?.value || '';
-          const html = await searchLibrary(term);
-          const tgt = $$('#hdrLibResults');
-          if (tgt) tgt.innerHTML = html || '<span class="muted">No results</span>';
-          $all('[data-pick-src]').forEach(a=>{
-            a.onclick = ()=>{
-              b.img.src=a.dataset.pickSrc;
-              b.img.source='library';
-              if (srcSel) srcSel.value='library';
-              toggleSourceRows(b);
-              autoSave();
-            };
-          });
-        };
+      if (libBtn && !libBtn.dataset.bound){
+        libBtn.dataset.bound = '1';
+        libBtn.addEventListener('click', ()=>{ triggerHeaderLibrarySearch(b); });
       }
 
-      // Ensure “Browse” button exists and bound
-      ensureBrowseButton();
+      const browseBtn = $$('#hdrLibBrowse');
+      if (browseBtn && !browseBtn.dataset.bound){
+        browseBtn.dataset.bound = '1';
+        browseBtn.addEventListener('click', ()=>{ openAssetBrowserWindow(); });
+      }
 
       // Alt
       const altEl = $$('#hdrAlt');
@@ -792,7 +793,10 @@ function toggleHeaderPanels(b){
   setVis('hdrAltRow',    false);
   setVis('hdrUrlRow',    false);
   setVis('hdrLibRow',    false);
-  if (!isImg) return;
+  if (!isImg){
+    resetLibrarySearchUi();
+    return;
+  }
   setVis('hdrImageGate', true);
   toggleSourceRows(b);
 }
@@ -803,10 +807,20 @@ function toggleSourceRows(b){
   setVis('hdrLibRow', false);
   setVis('hdrAltRow', false);
 
-  if (!src) return;
+  if (!src){
+    resetLibrarySearchUi();
+    return;
+  }
   setVis('hdrAltRow', true);
-  if (src==='url')     setVis('hdrUrlRow', true);
-  if (src==='library') setVis('hdrLibRow', true);
+  if (src==='url'){
+    setVis('hdrUrlRow', true);
+    resetLibrarySearchUi();
+  } else if (src==='library'){
+    setVis('hdrLibRow', true);
+    prepareLibrarySearchUi();
+  } else {
+    resetLibrarySearchUi();
+  }
 }
 
 // Ensure dropdown shows only URL/Library with new labels and removes Upload (even if present in HTML)
@@ -820,6 +834,94 @@ function patchImageSourceSelect(){
     else if (o.value === 'library') o.textContent = '🖼️ Library search';
     else if (o.value === 'upload')  sel.removeChild(o);
   });
+}
+
+/** ===========================
+ *  HEADER LIBRARY UI
+ *  ===========================
+ */
+function prepareLibrarySearchUi(){
+  const input = $$('#hdrLibQuery');
+  if (input && !input.dataset.init){
+    input.dataset.init = '1';
+    input.dataset.expanded = '0';
+    setVis(input, false);
+    input.addEventListener('keydown', e=>{
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        triggerHeaderLibrarySearch(state.blocks[0]);
+      }
+    });
+  }
+  const results = $$('#hdrLibResults');
+  if (results && !results.dataset.touched){
+    results.innerHTML = '<span class="library-message">Click Search to look up images.</span>';
+  }
+}
+
+function resetLibrarySearchUi(opts={}){
+  const { clearQuery=true } = opts;
+  const input = $$('#hdrLibQuery');
+  if (input){
+    if (clearQuery) input.value = '';
+    input.dataset.expanded = '0';
+    setVis(input, false);
+  }
+  const results = $$('#hdrLibResults');
+  if (results){
+    delete results.dataset.touched;
+    results.innerHTML = '<span class="library-message">Click Search to look up images.</span>';
+  }
+}
+
+async function triggerHeaderLibrarySearch(header){
+  const input = $$('#hdrLibQuery');
+  const results = $$('#hdrLibResults');
+  if (!input || !results) return;
+
+  if (input.dataset.expanded !== '1'){
+    input.dataset.expanded = '1';
+    setVis(input, true);
+    setTimeout(()=>{ try{ input.focus(); }catch(e){} }, 0);
+    results.innerHTML = '<span class="library-message">Type a file name (e.g. “podcast-fr-3”) and press Enter.</span>';
+    return;
+  }
+
+  const term = input.value.trim();
+  if (!term){
+    results.innerHTML = '<span class="library-message">Enter a name to search the library.</span>';
+    input.focus();
+    return;
+  }
+
+  results.dataset.touched = '1';
+  results.innerHTML = '<span class="library-message">Searching…</span>';
+
+  const { items, markup } = await searchLibrary(term);
+  results.innerHTML = markup;
+  if (!items.length) return;
+
+  initLibraryCarousel(results);
+  results.querySelectorAll('[data-pick-src]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      applyLibrarySelection(btn.getAttribute('data-pick-src') || '', header || state.blocks[0]);
+    });
+  });
+}
+
+function applyLibrarySelection(url, header){
+  if (!url) return;
+  const hdr = header || state.blocks[0];
+  if (!hdr || hdr.type !== 'header') return;
+  hdr.mode = 'image';
+  hdr.img = hdr.img || {};
+  hdr.img.src = url;
+  hdr.img.source = 'library';
+  const srcSel = $$('#hdrImgSource');
+  if (srcSel) srcSel.value = 'library';
+  toggleSourceRows(hdr);
+  autoSave();
+  renderProps();
 }
 
 /** ===========================
@@ -983,235 +1085,141 @@ ${endCard}`);
  */
 // SIMPLE SEARCH (back-compat)
 async function searchLibrary(term){
+  const safeTerm = term || '';
   try{
     const url = new URL(ASSETS.list);
-    if (term) url.searchParams.set('searchTerm', term);
+    if (safeTerm) url.searchParams.set('searchTerm', safeTerm);
     const res = await fetch(url.toString(), { credentials:'include' });
     if (!res.ok) throw new Error('list failed');
     const data = await res.json();
-    const items = Array.isArray(data?.items) ? data.items : [];
-    if (!items.length) return '<span class="muted">No results</span>';
-    return `<div class="stack">
-      ${items.map(x=>`
-        <div class="item">
-          <img src="${escapeHtml(x.thumbnail||x.url||'')}" alt="" width="40" height="40" style="border-radius:6px;object-fit:cover">
-          <div class="kind" style="font-weight:400">${escapeHtml(x.name||'')}</div>
-          <div class="actions">
-            <button class="btn btn-accent" data-pick-src="${escapeHtml(x.url||'')}"><i class="fa-solid fa-check"></i> Use</button>
-          </div>
-        </div>`).join('')}
-    </div>`;
+    const itemsRaw = Array.isArray(data?.items) ? data.items : [];
+    const items = itemsRaw.map(x=>({
+      name: x.name || '',
+      url: x.url || '',
+      thumbnail: x.thumbnail || x.url || ''
+    })).filter(x=>x.url);
+
+    if (!items.length){
+      if (safeTerm){
+        return { items: [], markup: `<span class="library-message">No results for “${escapeHtml(safeTerm)}”.</span>` };
+      }
+      return { items: [], markup: '<span class="library-message">No results.</span>' };
+    }
+
+    const fallbackUsed = data?.fallbackUsed === true;
+    return {
+      items,
+      markup: buildLibraryCarouselMarkup(items, { term: safeTerm, fallbackUsed })
+    };
   }catch(e){
     console.error(e);
-    return `<div class="muted">Error loading library.</div>`;
+    return { items: [], markup: '<span class="library-message">Error loading library.</span>' };
   }
 }
 
-/** ===========================
- *  ADVANCED BROWSER (folders + query)
- *  ===========================
- *  Self-injects modal markup & styles, and a “Browse” button next to the search.
- */
-const AB = {
-  el: { modal:null, close:null, up:null, folders:null, grid:null, status:null, search:null, sort:null, prev:null, next:null },
-  state: { stack:[0], page:1, pageSize:24, searchText:'', orderBy:'modifiedDate', orderDir:'DESC', lastCount:0 }
-};
+function buildLibraryCarouselMarkup(items, opts={}){
+  const term = opts.term || '';
+  const fallbackUsed = opts.fallbackUsed === true;
+  const messages = [];
+  if (term) messages.push(`Results for “${escapeHtml(term)}”`);
+  if (fallbackUsed) messages.push('Showing available image results');
+  const cards = items.map(item=>`
+    <button type="button" class="library-card" data-pick-src="${escapeHtml(item.url)}">
+      <span class="library-card__thumb">
+        <img src="${escapeHtml(item.thumbnail)}" alt="">
+      </span>
+      <span class="library-card__name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
+    </button>`).join('');
 
-function ensureAssetBrowserUi(){
-  injectAssetBrowserStyles();
-  ensureAssetBrowserModal();
-  ensureBrowseButton();
-}
+  const messageHtml = messages.length ? `<span class="library-message">${messages.join(' • ')}</span>` : '';
 
-function ensureBrowseButton(){
-  const bar = $$('#hdrLibRow .toolbar');
-  if (!bar) return;
-  let btn = $$('#hdrLibBrowse');
-  if (!btn){
-    btn = document.createElement('button');
-    btn.id = 'hdrLibBrowse';
-    btn.className = 'btn';
-    btn.title = 'Browse folders';
-    btn.innerHTML = '<i class="fa-regular fa-folder-open"></i> Browse';
-    bar.appendChild(btn);
-  }
-  btn.onclick = abOpen;
-}
-
-function injectAssetBrowserStyles(){
-  if (document.getElementById('abStyles')) return;
-  const css = `
-.asset-modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:99999}
-.asset-modal>.box{background:#fff;border-radius:12px;max-width:720px;width:96%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;border:1px solid #cfe6f3}
-.asset-modal header{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #e5eff7}
-.asset-modal .body{display:grid;grid-template-columns:220px 1fr;gap:0;min-height:360px}
-.asset-modal .side{border-right:1px solid #e5eff7;padding:10px}
-.asset-modal .main{padding:10px;display:flex;flex-direction:column;gap:10px}
-.asset-modal .folder{display:flex;align-items:center;gap:8px;padding:6px;border-radius:8px;cursor:pointer}
-.asset-modal .folder:hover{background:#f3f8fb}
-.asset-modal .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.asset-modal .tile{border:1px solid #e5eff7;border-radius:8px;padding:8px;display:flex;gap:8px;align-items:center}
-.asset-modal .tile img{width:48px;height:48px;object-fit:cover;border-radius:6px}
-.asset-modal .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.asset-modal .push{margin-left:auto}
-  `.trim();
-  const style = document.createElement('style');
-  style.id = 'abStyles';
-  style.textContent = css;
-  document.head.appendChild(style);
-}
-
-function ensureAssetBrowserModal(){
-  let modal = $$('#assetBrowser');
-  if (!modal){
-    const tpl = `
-<div id="assetBrowser" class="asset-modal" hidden>
-  <div class="box">
-    <header>
-      <div class="row"><strong>Browse assets</strong></div>
-      <div class="row">
-        <button id="abClose" class="btn icon" title="Close"><i class="fa-solid fa-xmark"></i></button>
+  return `
+    ${messageHtml}
+    <div class="library-carousel" data-count="${items.length}">
+      <button type="button" class="carousel-nav prev" aria-label="Scroll left"><i class="fa-solid fa-chevron-left"></i></button>
+      <div class="library-carousel__viewport">
+        <div class="library-carousel__track">
+          ${cards}
+        </div>
       </div>
-    </header>
-    <div class="body">
-      <aside class="side">
-        <div class="row" style="margin-bottom:8px">
-          <button id="abUp" class="btn" title="Up one level"><i class="fa-solid fa-arrow-up"></i> Up</button>
-        </div>
-        <div id="abFolders"></div>
-      </aside>
-      <section class="main">
-        <div class="row">
-          <input type="text" id="abSearch" placeholder="Filter by name/description…" style="flex:1;padding:8px 10px;border:1px solid #cfe6f3;border-radius:10px">
-          <select id="abSort" style="width:auto">
-            <option value="modifiedDate|DESC">Modified (new → old)</option>
-            <option value="modifiedDate|ASC">Modified (old → new)</option>
-            <option value="name|ASC">Name (A→Z)</option>
-            <option value="name|DESC">Name (Z→A)</option>
-          </select>
-          <div class="push"></div>
-          <button id="abPrev" class="btn">Prev</button>
-          <button id="abNext" class="btn">Next</button>
-        </div>
-        <div id="abGrid" class="grid"></div>
-        <div id="abStatus" class="muted"></div>
-      </section>
-    </div>
-  </div>
-</div>`;
-    document.body.insertAdjacentHTML('beforeend', tpl);
-  }
-  // map elements & bind
-  AB.el.modal   = $$('#assetBrowser');
-  AB.el.close   = $$('#abClose');
-  AB.el.up      = $$('#abUp');
-  AB.el.folders = $$('#abFolders');
-  AB.el.grid    = $$('#abGrid');
-  AB.el.status  = $$('#abStatus');
-  AB.el.search  = $$('#abSearch');
-  AB.el.sort    = $$('#abSort');
-  AB.el.prev    = $$('#abPrev');
-  AB.el.next    = $$('#abNext');
+      <button type="button" class="carousel-nav next" aria-label="Scroll right"><i class="fa-solid fa-chevron-right"></i></button>
+    </div>`;
+}
 
-  AB.el.close.onclick = abClose;
-  AB.el.up.onclick    = ()=>{ if (AB.state.stack.length>1){ AB.state.stack.pop(); AB.state.page=1; abRefresh(); } };
+function initLibraryCarousel(root){
+  const carousel = root.querySelector('.library-carousel');
+  if (!carousel) return;
+  const viewport = carousel.querySelector('.library-carousel__viewport');
+  const track = carousel.querySelector('.library-carousel__track');
+  const prev = carousel.querySelector('.carousel-nav.prev');
+  const next = carousel.querySelector('.carousel-nav.next');
+  const cards = Array.from(carousel.querySelectorAll('.library-card'));
+  if (!viewport || !prev || !next) return;
 
-  AB.el.search.addEventListener('input', debounce(()=>{
-    AB.state.searchText = AB.el.search.value.trim();
-    AB.state.page = 1;
-    abRefresh();
-  }, 300));
-
-  AB.el.sort.onchange = ()=>{
-    const [prop,dir] = AB.el.sort.value.split('|');
-    AB.state.orderBy = prop; AB.state.orderDir = dir; AB.state.page = 1; abRefresh();
+  const gap = track ? parseFloat(window.getComputedStyle(track).columnGap || '0') : 0;
+  const stepSize = ()=>{
+    if (!cards.length) return viewport.clientWidth;
+    const width = cards[0].getBoundingClientRect().width;
+    const cardsPerView = 3;
+    return Math.max(viewport.clientWidth, (width * cardsPerView) + gap * (cardsPerView - 1));
   };
 
-  AB.el.prev.onclick = ()=>{ if (AB.state.page>1){ AB.state.page--; abRefresh(); } };
-  AB.el.next.onclick = ()=>{ AB.state.page++; abRefresh(); };
+  const updateButtons = ()=>{
+    if (cards.length <= 3){
+      carousel.classList.add('is-nav-hidden');
+    } else {
+      carousel.classList.remove('is-nav-hidden');
+    }
+    const maxScroll = Math.max(0, viewport.scrollWidth - viewport.clientWidth - 4);
+    prev.disabled = viewport.scrollLeft <= 4;
+    next.disabled = viewport.scrollLeft >= maxScroll;
+  };
+
+  prev.onclick = ()=>{ viewport.scrollBy({ left: -stepSize(), behavior:'smooth' }); };
+  next.onclick = ()=>{ viewport.scrollBy({ left: stepSize(), behavior:'smooth' }); };
+  viewport.addEventListener('scroll', ()=>{ window.requestAnimationFrame(updateButtons); });
+  setTimeout(updateButtons, 60);
 }
 
-function abOpen(){ if(!AB.el.modal) ensureAssetBrowserModal(); AB.el.modal.hidden=false; AB.el.modal.style.display='flex'; abRefresh(); }
-function abClose(){ if(!AB.el.modal) return; AB.el.modal.hidden=true; AB.el.modal.style.display='none'; }
+function handleAssetBrowserMessage(event){
+  if (!event || !event.data) return;
+  if (BROWSER_ORIGIN && event.origin !== BROWSER_ORIGIN) return;
+  if (browseWindow && event.source !== browseWindow) return;
 
-async function abRefresh(){
-  const catId = AB.state.stack[AB.state.stack.length-1] || 0;
-  // folders
-  try{
-    const url = new URL(ASSETS.folders);
-    url.searchParams.set('parentId', catId);
-    const r = await fetch(url.toString(), { credentials:'include' });
-    const data = await r.json();
-    const items = Array.isArray(data?.items) ? data.items : [];
-    AB.el.folders.innerHTML = items.length
-      ? items.map(f=>`<div class="folder" data-cid="${f.id}"><i class="fa-regular fa-folder"></i> ${escapeHtml(f.name||'')}</div>`).join('')
-      : '<div class="muted">No subfolders</div>';
-    Array.from(AB.el.folders.querySelectorAll('[data-cid]')).forEach(n=>{
-      n.onclick = ()=>{ AB.state.stack.push(parseInt(n.dataset.cid,10)); AB.state.page=1; abRefresh(); };
-    });
-  }catch(e){
-    console.error(e);
-    AB.el.folders.innerHTML = '<div class="muted">Error loading folders</div>';
+  const data = event.data;
+  if (data.type === 'asset-browser-ready' && event.source){
+    browseWindow = event.source;
+    return;
+  }
+  if (data.type === 'asset-selected' && data.url){
+    applyLibrarySelection(data.url, state.blocks[0]);
+    if (browseWindow && browseWindow === event.source){
+      try{ browseWindow.close(); }catch(e){}
+      browseWindow = null;
+    }
+  }
+}
+
+function openAssetBrowserWindow(){
+  if (browseWindow && !browseWindow.closed){
+    try{ browseWindow.focus(); return; }catch(e){}
   }
 
-  // assets
-  try{
-    const payload = {
-      page: AB.state.page,
-      pageSize: AB.state.pageSize,
-      categoryId: catId === 0 ? null : catId,
-      searchText: AB.state.searchText,
-      orderBy: AB.state.orderBy,
-      orderDir: AB.state.orderDir
-    };
-    const r = await fetch(ASSETS.query, {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify(payload),
-      credentials:'include'
-    });
-    const data = await r.json();
-    const items = Array.isArray(data?.items) ? data.items : [];
-    AB.state.lastCount = data?.count || items.length || 0;
-
-    AB.el.grid.innerHTML = items.length
-      ? items.map(a=>`
-          <div class="tile">
-            <img src="${escapeHtml(a.thumbnail||a.url||'')}" alt="">
-            <div style="flex:1">
-              <div style="font-weight:600">${escapeHtml(a.name||'')}</div>
-              <div class="muted" style="font-size:11px">${escapeHtml(a.modifiedDate||'')}</div>
-            </div>
-            <div>
-              <button class="btn btn-accent" data-pick-src="${escapeHtml(a.url||'')}">
-                <i class="fa-solid fa-check"></i> Use
-              </button>
-            </div>
-          </div>`).join('')
-      : '<div class="muted">No assets</div>';
-
-    // Bind Use buttons
-    AB.el.grid.querySelectorAll('[data-pick-src]').forEach(btn=>{
-      btn.onclick = ()=>{
-        const src = btn.getAttribute('data-pick-src') || '';
-        const b = state.blocks[0];
-        if (b && b.type==='header'){
-          b.mode = 'image';
-          b.img = b.img || {};
-          b.img.src = src;
-          b.img.source = 'library';
-          autoSave();
-          renderProps();
-        }
-        abClose();
-      };
-    });
-
-    AB.el.status.textContent = `Folder ${catId} • Page ${AB.state.page} • ${AB.state.lastCount} items`;
-  }catch(e){
-    console.error(e);
-    AB.el.grid.innerHTML = '<div class="muted">Error loading assets</div>';
+  const base = BROWSER_URL ? new URL(BROWSER_URL.toString()) : new URL(ASSETS.browserPage, window.location.href);
+  const input = $$('#hdrLibQuery');
+  if (input && input.dataset.expanded === '1' && input.value.trim()){
+    base.searchParams.set('search', input.value.trim());
   }
+  try{ base.searchParams.set('parentOrigin', window.location.origin); }catch(e){}
+
+  const features = 'width=960,height=720,resizable=yes,scrollbars=yes';
+  const child = window.open(base.toString(), 'AssetBrowserWindow', features);
+  if (!child){
+    alert('Please allow pop-ups to use the asset browser.');
+    return;
+  }
+  browseWindow = child;
+  try{ child.focus(); }catch(e){}
 }
 </script>
 
