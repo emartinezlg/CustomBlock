@@ -1,0 +1,79 @@
+const sdk = new window.sfdc.BlockSDK({
+  tabs: ['stylingblock']
+});
+
+var imgURL, style, height, width;
+
+function restoreParams() {
+  document.getElementById(style).checked = true;
+  document.getElementById('selectedImageUrl').innerText = imgURL;
+  document.getElementById('selectedImageUrl').dataset.url = imgURL;
+  document.getElementById('selectedImageUrl').dataset.height = height;
+  document.getElementById('selectedImageUrl').dataset.width = width;
+  document.getElementById('previewImg').src = imgURL; 
+}
+
+function setCont() {
+  style = document.querySelector('input[name="orientationCheckbox"]:checked').value;
+  imgURL = document.getElementById('selectedImageUrl').innerText;
+  height = document.getElementById('selectedImageUrl').dataset.height;
+  width = document.getElementById('selectedImageUrl').dataset.width;
+  let imgPreview = document.getElementById('previewImg').src;     
+
+  sdk.setContent(styleSelector(imgURL));  
+  sdk.setSuperContent(styleSelector(imgPreview));  
+  
+  sdk.setData({
+    imgURL: imgURL,
+    style: style,
+    height: height,
+    width: width
+  });
+}
+
+sdk.getData(function (data) {
+  imgURL = data.imgURL || 'https://image.email.kbs-frb.be/lib/fe39117075640475741371/m/1/4d20471e-e296-4187-b402-3cf1e0f32271.pnhttps://stibstories.be/wp-content/uploads/2024/07/bus-centrale-scaled.jpg';
+  style = data.style || 'up';
+  height = data.height || '400';
+  width = data.width || '600';
+  restoreParams();
+  setCont();
+});
+
+document.getElementById('workspace').addEventListener("inputChange", function () {
+  setCont();
+});
+
+document.getElementById('orientatioSelector').addEventListener("input", function () {
+  setCont();
+});
+
+function useExternalImage() {
+  const url = document.getElementById('externalImageUrl').value.trim();
+  if (url) {
+    const img = new Image();
+    img.onload = function () {
+      selectImage(url, this.height, this.width, url);
+    };
+    img.onerror = function () {
+      alert("Invalid image URL or the image couldn't be loaded.");
+    };
+    img.src = url;
+  } else {
+    alert("Please provide an image URL.");
+  }
+}
+
+
+
+function styleSelector(imgSRC) {
+  let ratio = (600/width);
+  let imgHTML
+  if (style == 'up') {
+    imgHTML = '<!--[if !mso]><!--><div style="max-height: 0; position:relative; opacity:0.999;"><!--<![endif]--><!--[if mso]><v:rect xmlns:v="urn:schemas-microsoft-com:vml" stroked="false" filled="false" style="mso-width-percent: 1000; position:absolute; top:' + ((height * ratio) - 28) + 'px;"><v:textbox inset="0,0,0,0"><![endif]--><div style="width: 100%; text-align: center; display:inline-block;"><img alt="" src="https://cpas-molenbeek.be/fr/stib-logo.jpg/@@images/5823654f-3c32-4a75-b58d-5372fb546836.jpeg" style="padding: 0px; max-height: 32px; width: 100%; margin-top: ' + (((height * ratio) - 28) * 0.166666666666667) + '%;" width="100%"></div><!--[if mso]></v:textbox></v:rect><![endif]--><!--[if !mso]><!--></div><!--<![endif]--><img src="' + imgSRC + '" alt="" class="image" style="width:100%;max-width:600px; display: block;" width="600">';
+  } else if (style == 'down') {
+    imgHTML = '<!--[if !mso]><!--><div style="max-height: 0; position:relative; opacity:0.999;" ><!--<![endif]--><!--[if mso]><v:rect xmlns:v="urn:schemas-microsoft-com:vml" stroked="false" filled="false" style="mso-width-percent: 1000; position:absolute; top:0px;"><v:textbox inset="0,0,0,0"><![endif]--><div style="width: 100%; text-align: center; display:inline-block;"><img alt="" src="https://cpas-molenbeek.be/fr/stib-logo.jpg/@@images/5823654f-3c32-4a75-b58d-5372fb546836.jpeg" style="padding: 0px; max-height: 32px; width: 100%;" width="100%"></div><!--[if mso]></v:textbox></v:rect><![endif]--><!--[if !mso]><!--></div><!--<![endif]--><img src="' + imgSRC + '" alt="" class="image" style="width:100%;max-width:600px; display: block;" width="600">';
+  }
+  return imgHTML
+}
+
