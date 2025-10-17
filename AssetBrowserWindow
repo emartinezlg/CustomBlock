@@ -1,0 +1,476 @@
+%%[
+/* -------- Strong server-side gate for the editor endpoint -------- */
+var @ref, @origin, @dest, @ok, @host, @orig
+
+set @ref   = HTTPRequestHeader("Referer")
+set @origin= HTTPRequestHeader("Origin")
+set @dest  = HTTPRequestHeader("Sec-Fetch-Dest")
+set @ok    = "false"
+
+/* 1) Allow when Referer is a known Marketing Cloud host */
+if not empty(@ref) then
+  set @host = Lowercase(@ref)
+  if IndexOf(@host, ".exacttarget.com") > 0 then set @ok = "true" endif
+  if IndexOf(@host, ".salesforce.com")  > 0 then set @ok = "true" endif
+  if IndexOf(@host, ".marketingcloudapps.com") > 0 then set @ok = "true" endif
+endif
+
+/* 2) Fallback: some browsers send Origin instead of Referer */
+if @ok == "false" and not empty(@origin) then
+  set @orig = Lowercase(@origin)
+  if IndexOf(@orig, ".exacttarget.com") > 0 then set @ok = "true" endif
+  if IndexOf(@orig, ".salesforce.com")  > 0 then set @ok = "true" endif
+  if IndexOf(@orig, ".marketingcloudapps.com") > 0 then set @ok = "true" endif
+endif
+
+/* 3) If the browser provides Sec-Fetch-Dest and it's not an iframe, block */
+if not empty(@dest) and Lowercase(@dest) != "iframe" then
+  set @ok = "false"
+endif
+
+/* 4) If not allowed, redirect BEFORE any HTML is emitted */
+if @ok == "false" then
+  Redirect("https://www.stib-mivb.be/")
+endif
+]%%
+
+<script runat="server">
+  Platform.Response.SetResponseHeader(
+    "Content-Security-Policy",
+    "frame-ancestors https://*.exacttarget.com https://*.salesforce.com https://*.marketingcloudapps.com"
+  );
+</script>
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Asset Library Browser</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" integrity="sha512-OLR8Sy5NdCWMtbb0PjrRiyxZSH8tryawGdaAeHH5fMvnax5pF+NeOV76DOV+qYWdGZo4PMBVXgS5ua5Yj3KURw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="https://cloud.info.stib-mivb.brussels/brusseline.css">
+  <style>
+    :root{
+      --bg:#f3f8fb;
+      --sidebar:#ffffff;
+      --border:#dbeafe;
+      --accent:#005F9A;
+      --ink:#0b2a3b;
+      --muted:#6b7280;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:Brusseline, Arial, sans-serif;
+      background:var(--bg);
+      color:var(--ink);
+      height:100vh;
+    }
+    .browser{display:flex;flex-direction:column;height:100vh;max-height:100vh;overflow:hidden}
+    .browser__header{background:#fff;border-bottom:1px solid var(--border);padding:16px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .browser__search{display:flex;align-items:center;gap:8px;flex:1;min-width:240px}
+    .browser__search input{flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font:inherit;background:#fff;color:var(--ink)}
+    .browser__controls{display:flex;align-items:center;gap:8px}
+    select{padding:9px 12px;border:1px solid var(--border);border-radius:10px;font:inherit;background:#fff;color:var(--ink)}
+    .btn{display:inline-flex;align-items:center;gap:6px;border-radius:10px;padding:8px 14px;font-size:14px;border:none;cursor:pointer;transition:background .2s,color .2s,opacity .2s}
+    .btn.primary{background:var(--accent);color:#fff;border:1px solid var(--accent)}
+    .btn.secondary{background:#fff;color:var(--accent);border:1px solid var(--accent)}
+    .btn.icon{padding:8px 10px}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .browser__body{flex:1;display:grid;grid-template-columns:260px 1fr;min-height:0}
+    .sidebar{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+    .sidebar__top{padding:12px;border-bottom:1px solid var(--border);display:flex;gap:8px}
+    .breadcrumb{padding:12px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:13px}
+    .breadcrumb button{background:none;border:none;color:var(--accent);cursor:pointer;font:inherit;padding:0}
+    .breadcrumb span{color:var(--muted)}
+    .folder-list{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:4px}
+    .folder{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:transparent;border:none;cursor:pointer;text-align:left;font:inherit;color:var(--ink)}
+    .folder:hover,.folder:focus-visible{background:#f1f6fa}
+    .main{padding:18px;overflow:auto;display:flex;flex-direction:column;gap:16px;min-height:0}
+    .main__toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    .pagination{display:flex;align-items:center;gap:8px;margin-left:auto}
+    .pagination .btn{min-width:72px;justify-content:center}
+    .status{font-size:13px;color:var(--muted)}
+    .asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;align-content:start}
+    .asset-card{display:flex;flex-direction:column;gap:10px;background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px;cursor:pointer;transition:border-color .2s,box-shadow .2s}
+    .asset-card:hover,.asset-card:focus-visible{border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,95,154,.18)}
+    .asset-card__thumb{width:100%;aspect-ratio:1;border-radius:10px;overflow:hidden;background:#f3f4f6;display:flex;align-items:center;justify-content:center}
+    .asset-card__thumb img{width:100%;height:100%;object-fit:cover}
+    .asset-card__name{font-weight:600;font-size:14px;color:var(--ink)}
+    .asset-card__meta{font-size:12px;color:var(--muted)}
+    .muted{color:var(--muted);font-size:13px}
+    @media (max-width:880px){
+      .browser__body{grid-template-columns:1fr}
+      .sidebar{order:2;min-height:220px}
+      .main{order:1}
+    }
+  </style>
+</head>
+<body>
+  <div class="browser">
+    <header class="browser__header">
+      <div class="browser__search">
+        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+        <input type="search" id="abSearch" placeholder="Search by name or description" autocomplete="off" />
+        <button id="abSearchBtn" class="btn primary"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
+      </div>
+      <div class="browser__controls">
+        <select id="abSort">
+          <option value="modifiedDate|DESC">Newest → Oldest</option>
+          <option value="modifiedDate|ASC">Older → Newest</option>
+          <option value="name|ASC">Name A → Z</option>
+          <option value="name|DESC">Name Z → A</option>
+        </select>
+      </div>
+    </header>
+    <div class="browser__body">
+      <aside class="sidebar">
+        <div class="sidebar__top">
+          <button id="abUp" class="btn secondary"><i class="fa-solid fa-arrow-up"></i> Up</button>
+        </div>
+        <nav id="abBreadcrumb" class="breadcrumb"></nav>
+        <div id="abFolders" class="folder-list"></div>
+      </aside>
+      <main class="main">
+        <div class="main__toolbar">
+          <div class="status" id="abFolderName"></div>
+          <div class="pagination">
+            <button id="abPrev" class="btn secondary"><i class="fa-solid fa-chevron-left"></i> Prev</button>
+            <span id="abPageInfo" class="status"></span>
+            <button id="abNext" class="btn secondary">Next <i class="fa-solid fa-chevron-right"></i></button>
+          </div>
+        </div>
+        <div id="abStatus" class="status"></div>
+        <div id="abGrid" class="asset-grid"></div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const ASSETS = {
+      list   : 'https://cloud.info.stib-mivb.brussels/Assets-data-handler?action=list',
+      folders: 'https://cloud.info.stib-mivb.brussels/Assets-data-handler?action=folders',
+      query  : 'https://cloud.info.stib-mivb.brussels/Assets-data-handler?action=assetsQuery'
+    };
+
+    const state = {
+      stack:[0],
+      crumbs:[{ id:0, name:'All Content' }],
+      page:1,
+      pageSize:24,
+      searchText:'',
+      orderBy:'modifiedDate',
+      orderDir:'DESC',
+      lastItems:0
+    };
+
+    const els = {};
+    let targetOrigin = window.location.origin;
+
+    const escapeHtml = s => {
+      const map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+      return (s || '').replace(/[&<>"']/g, ch => map[ch]);
+    };
+    const debounce = (fn,t=300)=>{ let to; return (...args)=>{ clearTimeout(to); to=setTimeout(()=>fn(...args),t); }; };
+
+    function currentCategoryId(){
+      return state.stack[state.stack.length-1] || 0;
+    }
+
+    function currentCategoryName(){
+      const crumb = state.crumbs[state.crumbs.length-1];
+      return (crumb && crumb.name) ? crumb.name : 'All Content';
+    }
+
+    function init(){
+      els.search = document.getElementById('abSearch');
+      els.searchBtn = document.getElementById('abSearchBtn');
+      els.sort = document.getElementById('abSort');
+      els.up = document.getElementById('abUp');
+      els.folders = document.getElementById('abFolders');
+      els.breadcrumb = document.getElementById('abBreadcrumb');
+      els.grid = document.getElementById('abGrid');
+      els.status = document.getElementById('abStatus');
+      els.folderName = document.getElementById('abFolderName');
+      els.prev = document.getElementById('abPrev');
+      els.next = document.getElementById('abNext');
+      els.pageInfo = document.getElementById('abPageInfo');
+
+      const params = new URLSearchParams(window.location.search);
+      const originParam = params.get('parentOrigin');
+      if (originParam){
+        try{
+          const parsed = new URL(originParam);
+          targetOrigin = parsed.origin;
+        }catch(e){
+          targetOrigin = originParam;
+        }
+      }
+      const initialSearch = params.get('search') || '';
+      if (initialSearch){
+        els.search.value = initialSearch;
+        state.searchText = initialSearch;
+      }
+
+      els.searchBtn.addEventListener('click', ()=>{
+        state.searchText = (els.search.value || '').trim();
+        state.page = 1;
+        refresh();
+      });
+      els.search.addEventListener('keydown', e=>{
+        if (e.key === 'Enter'){
+          e.preventDefault();
+          state.searchText = (els.search.value || '').trim();
+          state.page = 1;
+          refresh();
+        }
+      });
+      els.search.addEventListener('input', debounce(()=>{
+        state.searchText = (els.search.value || '').trim();
+        state.page = 1;
+        refresh();
+      }, 500));
+
+      els.sort.addEventListener('change', ()=>{
+        const [prop,dir] = (els.sort.value || 'modifiedDate|DESC').split('|');
+        state.orderBy = prop || 'modifiedDate';
+        state.orderDir = dir || 'DESC';
+        state.page = 1;
+        refresh();
+      });
+
+      els.up.addEventListener('click', ()=>{
+        if (state.stack.length > 1){
+          state.stack.pop();
+          state.crumbs.pop();
+          state.page = 1;
+          refresh();
+        }
+      });
+
+      els.prev.addEventListener('click', ()=>{
+        if (state.page > 1){
+          state.page--;
+          refresh();
+        }
+      });
+
+      els.next.addEventListener('click', ()=>{
+        state.page++;
+        refresh();
+      });
+
+      refresh();
+      notifyReady();
+    }
+
+    function refresh(){
+      state.lastItems = 0;
+      renderBreadcrumbs();
+      renderFolderPlaceholder();
+      renderAssetPlaceholder();
+      updateControls(true);
+      els.status.textContent = '';
+      loadFolders();
+      loadAssets();
+    }
+
+    function renderBreadcrumbs(){
+      if (!els.breadcrumb) return;
+      const html = state.crumbs.map((crumb, idx)=>{
+        const safeName = escapeHtml(crumb.name || 'Folder');
+        if (idx === state.crumbs.length-1){
+          return `<span>${safeName}</span>`;
+        }
+        return `<button type="button" data-crumb="${idx}">${safeName}</button><span>&rsaquo;</span>`;
+      }).join(' ');
+      els.breadcrumb.innerHTML = html;
+      els.breadcrumb.querySelectorAll('button[data-crumb]').forEach(btn=>{
+        btn.addEventListener('click', ()=>{
+          const target = parseInt(btn.dataset.crumb,10);
+          if (!Number.isFinite(target)) return;
+          state.stack = state.stack.slice(0, target + 1);
+          state.crumbs = state.crumbs.slice(0, target + 1);
+          state.page = 1;
+          refresh();
+        });
+      });
+      if (els.folderName){
+        els.folderName.textContent = currentCategoryName();
+      }
+    }
+
+    function renderFolderPlaceholder(){
+      if (els.folders){
+        els.folders.innerHTML = '<div class="muted">Loading folders…</div>';
+      }
+    }
+
+    function renderAssetPlaceholder(){
+      if (els.grid){
+        els.grid.innerHTML = '<div class="muted">Loading assets…</div>';
+      }
+    }
+
+    async function loadFolders(){
+      if (!els.folders) return;
+      try{
+        const url = new URL(ASSETS.folders);
+        url.searchParams.set('parentId', currentCategoryId());
+        const res = await fetch(url.toString(), { credentials:'include' });
+        if (!res.ok) throw new Error('folders');
+        const data = await res.json();
+        const items = Array.isArray(data?.items) ? data.items : [];
+        if (!items.length){
+          els.folders.innerHTML = '<div class="muted">No subfolders</div>';
+          return;
+        }
+        els.folders.innerHTML = items.map(f=>`
+          <button type="button" class="folder" data-id="${f.id}" data-name="${escapeHtml(f.name||'Folder')}">
+            <i class="fa-regular fa-folder"></i>
+            <span>${escapeHtml(f.name||'')}</span>
+          </button>`).join('');
+        els.folders.querySelectorAll('.folder').forEach(btn=>{
+          btn.addEventListener('click', ()=>{
+            const id = parseInt(btn.dataset.id,10);
+            if (!Number.isFinite(id)) return;
+            const name = btn.dataset.name || `Folder ${id}`;
+            state.stack.push(id);
+            state.crumbs.push({ id, name });
+            state.page = 1;
+            refresh();
+          });
+        });
+      }catch(e){
+        console.error(e);
+        els.folders.innerHTML = '<div class="muted">Unable to load folders.</div>';
+      }
+    }
+
+    async function loadAssets(){
+      if (!els.grid) return;
+      try{
+        const payload = {
+          page: state.page,
+          pageSize: state.pageSize,
+          categoryId: currentCategoryId() === 0 ? null : currentCategoryId(),
+          searchText: state.searchText,
+          orderBy: state.orderBy,
+          orderDir: state.orderDir
+        };
+        const res = await fetch(ASSETS.query, {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify(payload),
+          credentials:'include'
+        });
+        if (!res.ok) throw new Error('assets');
+        const data = await res.json();
+        const items = Array.isArray(data?.items) ? data.items : [];
+        const actualPage = parseInt(data?.actualPage, 10);
+        if (Number.isFinite(actualPage) && actualPage > 0 && actualPage !== state.page){
+          state.page = actualPage;
+        }
+        const actualPageSize = parseInt(data?.actualPageSize, 10);
+        if (Number.isFinite(actualPageSize) && actualPageSize > 0){
+          state.pageSize = actualPageSize;
+        }
+        if (state.page > 1 && items.length === 0){
+          state.page--;
+          return loadAssets();
+        }
+        state.lastItems = items.length;
+        renderAssets(items, data?.fallbackUsed === true);
+      }catch(e){
+        console.error(e);
+        state.lastItems = 0;
+        els.grid.innerHTML = '<div class="muted">Unable to load assets.</div>';
+        els.status.textContent = '';
+        updateControls(false);
+      }
+    }
+
+    function renderAssets(items, fallbackUsed){
+      if (!items.length){
+        els.grid.innerHTML = '<div class="muted">No assets match your filters.</div>';
+        els.status.textContent = buildStatusText(0);
+        updateControls(false);
+        return;
+      }
+      els.grid.innerHTML = items.map(a=>`
+        <button type="button" class="asset-card" data-id="${a.id}" data-url="${escapeHtml(a.url||'')}" data-name="${escapeHtml(a.name||'')}" data-category="${a.categoryId||''}">
+          <span class="asset-card__thumb">
+            <img src="${escapeHtml(a.thumbnail||a.url||'')}" alt="">
+          </span>
+          <span class="asset-card__name">${escapeHtml(a.name||'')}</span>
+          <span class="asset-card__meta">${formatDate(a.modifiedDate) || ''}</span>
+        </button>`).join('');
+      els.grid.querySelectorAll('.asset-card').forEach(btn=>{
+        btn.addEventListener('click', ()=>{
+          const asset = {
+            id: parseInt(btn.dataset.id,10),
+            name: btn.dataset.name || '',
+            url: btn.dataset.url || '',
+            categoryId: btn.dataset.category ? parseInt(btn.dataset.category,10) : undefined,
+            thumbnail: btn.querySelector('img')?.src || '',
+            alt: btn.dataset.name || ''
+          };
+          postSelection(asset);
+        });
+      });
+      let status = buildStatusText(items.length);
+      if (fallbackUsed){
+        status += ' • Showing available image results';
+      }
+      els.status.textContent = status;
+      updateControls(false);
+    }
+
+    function buildStatusText(count){
+      const bits = [];
+      bits.push(`${count} asset${count === 1 ? '' : 's'}`);
+      if (state.searchText){
+        bits.push(`matching “${state.searchText}”`);
+      }
+      bits.push(`in ${currentCategoryName()}`);
+      return bits.join(' ');
+    }
+
+    function updateControls(isLoading){
+      if (els.up) els.up.disabled = state.stack.length <= 1 || isLoading;
+      if (els.prev) els.prev.disabled = state.page <= 1 || isLoading;
+      if (els.next) els.next.disabled = isLoading || state.lastItems < state.pageSize;
+      if (els.pageInfo) els.pageInfo.textContent = `Page ${state.page}`;
+    }
+
+    function formatDate(str){
+      if (!str) return '';
+      const date = new Date(str);
+      if (Number.isNaN(date.getTime())) return '';
+      return date.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
+    }
+
+    function notifyReady(){
+      if (!window.opener) return;
+      try{ window.opener.postMessage({ type:'asset-browser-ready' }, targetOrigin); }
+      catch(e){ console.error(e); }
+    }
+
+    function postSelection(asset){
+      const url = asset && asset.url ? asset.url : '';
+      if (!url) return;
+      try{
+        if (window.opener){
+          const payload = { type:'asset-selected', url };
+          window.opener.postMessage(payload, targetOrigin);
+        }
+      }catch(e){
+        console.error(e);
+      }
+      try{ window.close(); }catch(e){}
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
