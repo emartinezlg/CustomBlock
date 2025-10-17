@@ -75,8 +75,11 @@ function actionAssetsQuery(qs, body){
   var orderBy  = body.orderBy || "modifiedDate";
   var orderDir = body.orderDir || "DESC";
 
-  // Base: images only
-  var root = cond("assetType.displayName","equals","image");
+  // Base: images only (match both API name + display label to avoid case mismatches)
+  var root = OR(
+    cond("assetType.displayName","equals","Image"),
+    cond("assetType.name","equals","image")
+  );
 
   // Optional: folder filter
   if (catId !== null){ root = AND(root, cond("category.id","equals", String(catId))); }
@@ -132,7 +135,10 @@ function actionList(qs){
   var payload = {
     page:1, pageSize:50,
     query: AND(
-      cond("assetType.displayName","equals","image"),
+      OR(
+        cond("assetType.displayName","equals","Image"),
+        cond("assetType.name","equals","image")
+      ),
       OR(cond("name","like","%" + term + "%"), cond("description","like","%" + term + "%"))
     ),
     sort:[{ Property:"modifiedDate", Direction:"DESC" }]
