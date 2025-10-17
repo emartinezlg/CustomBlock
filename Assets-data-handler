@@ -47,6 +47,194 @@ function cond(prop, op, val){ return { Property:prop, SimpleOperator:op, Value:v
 function AND(a,b){ return { LeftOperand:a, LogicalOperator:"AND", RightOperand:b }; }
 function OR(a,b){  return { LeftOperand:a, LogicalOperator:"OR",  RightOperand:b }; }
 
+function ensureArray(arr){
+  var out = [];
+  if (!arr) return out;
+  for (var i=0;i<arr.length;i++){
+    if (arr[i]) out.push(arr[i]);
+  }
+  return out;
+}
+
+function allOf(list){
+  var items = ensureArray(list);
+  if (!items.length) return null;
+  var root = items[0];
+  for (var i=1;i<items.length;i++) root = AND(root, items[i]);
+  return root;
+}
+
+function anyOf(list){
+  var items = ensureArray(list);
+  if (!items.length) return null;
+  var root = items[0];
+  for (var i=1;i<items.length;i++) root = OR(root, items[i]);
+  return root;
+}
+
+function alwaysTrue(){ return cond("id","isNotNull",""); }
+
+function buildImageFilter(){
+  return anyOf([
+    cond("assetType.id","equals","28"),
+    cond("assetType.id","equals","197"),
+    cond("assetType.name","equals","image"),
+    cond("assetType.name","equals","Image"),
+    cond("assetType.displayName","equals","image"),
+    cond("assetType.displayName","equals","Image")
+  ]);
+}
+
+function buildSearchFilter(term){
+  if (!term) return null;
+  var like = "%" + term + "%";
+  return anyOf([
+    cond("name","like", like),
+    cond("name","contains", term),
+    cond("description","like", like),
+    cond("description","contains", term)
+  ]);
+}
+
+function buildFolderFilter(catId){
+  if (catId === null || catId === undefined || catId === "") return null;
+  return cond("category.id","equals", String(catId));
+}
+
+function isImageAsset(asset){
+  if (!asset) return false;
+
+  var type = asset.assetType || {};
+  var typeName = (type.name || "").toLowerCase();
+  var display = (type.displayName || "").toLowerCase();
+  var typeId = String(type.id || "");
+  if (typeName === "image" || display === "image") return true;
+  if (typeId === "28" || typeId === "197") return true;
+
+  var fp = asset.fileProperties || {};
+  var mime = (fp.mimeType || "").toLowerCase();
+  if (mime && mime.indexOf("image/") === 0) return true;
+
+  var ext = (fp.fileExtension || fp.extension || "").toLowerCase();
+  var url = (fp.publishedURL || fp.url || "").toLowerCase();
+  if (!ext && url){
+    var match = url.match(/\.([a-z0-9]+)(?:\?|$)/);
+    if (match){ ext = match[1]; }
+  }
+  if (!ext){
+    var name = (asset.name || "").toLowerCase();
+    var nameMatch = name.match(/\.([a-z0-9]+)$/);
+    if (nameMatch){ ext = nameMatch[1]; }
+  }
+  var known = { jpg:1, jpeg:1, png:1, gif:1, bmp:1, svg:1, webp:1, jfif:1, pjpeg:1, pjp:1, tif:1, tiff:1, avif:1 };
+  if (ext && known[ext]) return true;
+  return false;
+}
+
+function mapAsset(a){
+  var fp = a.fileProperties || {};
+  var url = fp.publishedURL || fp.url || "";
+  return {
+    id          : a.id,
+    name        : a.name,
+    description : a.description,
+    categoryId  : a.category ? a.category.id : null,
+    modifiedDate: a.modifiedDate,
+    createdDate : a.createdDate,
+    size        : fp.fileSize || null,
+    url         : url,
+    thumbnail   : a.thumbnailUrl || url
+  };
+}
+
+function extractAssets(data, filterFn){
+  var rawItems = (data && data.items) ? data.items : [];
+  var filtered = filterFn ? rawItems.filter(filterFn) : rawItems;
+  var items = [];
+  for (var i=0;i<filtered.length;i++) items.push(mapAsset(filtered[i]));
+  return {
+    items: items,
+    count: items.length,
+    raw: data
+  };
+}
+
+function buildQuery(includeImageFilter, catId, search){
+  return allOf([
+    includeImageFilter ? buildImageFilter() : null,
+    buildFolderFilter(catId),
+    buildSearchFilter(search)
+  ]);
+}
+
+function queryAssets(token, opts){
+  var page     = opts.page     || 1;
+  var pageSize = opts.pageSize || 24;
+  var orderBy  = opts.orderBy  || "modifiedDate";
+  var orderDir = opts.orderDir || "DESC";
+  var catId    = opts.categoryId;
+  var search   = opts.searchText || "";
+  var allowFallback = opts.allowFallback === false ? false : true;
+
+  var queryNode = buildQuery(false, catId, search) || alwaysTrue();
+  var payload = {
+    page    : page,
+    pageSize: pageSize,
+    query   : queryNode,
+    sort    : [{ Property: orderBy, Direction: orderDir }]
+  };
+
+  var resp = httpPostJson(REST_BASE + "asset/v1/content/assets/query", token, payload);
+  if (resp.code < 200 || resp.code >= 300){
+    return {
+      items: [],
+      count: 0,
+      raw: resp.data,
+      pageUsed: page,
+      pageSizeUsed: pageSize,
+      fallback: false,
+      statusCode: resp.code
+    };
+  }
+
+  var result = extractAssets(resp.data, isImageAsset);
+  result.pageUsed = page;
+  result.pageSizeUsed = pageSize;
+  result.fallback = false;
+  result.statusCode = resp.code;
+
+  if (allowFallback && (!result.items || result.items.length === 0)){
+    var fallbackQuery = buildQuery(false, catId, "");
+    if (!fallbackQuery) fallbackQuery = alwaysTrue();
+    var fallbackPayload = {
+      page    : 1,
+      pageSize: Math.min(pageSize * 2, 200),
+      query   : fallbackQuery,
+      sort    : [{ Property: orderBy, Direction: orderDir }]
+    };
+    var fallbackResp = httpPostJson(REST_BASE + "asset/v1/content/assets/query", token, fallbackPayload);
+    if (fallbackResp.code >= 200 && fallbackResp.code < 300){
+      var fallbackResult = extractAssets(fallbackResp.data, isImageAsset);
+      fallbackResult.pageUsed = fallbackPayload.page;
+      fallbackResult.pageSizeUsed = fallbackPayload.pageSize;
+      fallbackResult.fallback = true;
+      fallbackResult.statusCode = fallbackResp.code;
+      return fallbackResult;
+    }
+    return {
+      items: [],
+      count: 0,
+      raw: fallbackResp.data,
+      pageUsed: fallbackPayload.page,
+      pageSizeUsed: fallbackPayload.pageSize,
+      fallback: true,
+      statusCode: fallbackResp.code
+    };
+  }
+
+  return result;
+}
+
 // ---- Actions ----
 function actionFolders(qs, body){
   var parentId = qs.parentId; if (parentId === undefined) parentId = body.parentId;
@@ -93,37 +281,29 @@ function actionAssetsQuery(qs, body){
   var payload = {
     page    : page,
     pageSize: pageSize,
-    query   : root,
-    sort    : [{ Property: orderBy, Direction: orderDir }]
-  };
+    categoryId: catId,
+    searchText: search,
+    orderBy: orderBy,
+    orderDir: orderDir,
+    allowFallback: true
+  });
 
-  var resp  = httpPostJson(REST_BASE + "asset/v1/content/assets/query", token, payload);
-  var items = [];
-  if (resp.data && resp.data.items){
-    for (var i=0;i<resp.data.items.length;i++){
-      var a  = resp.data.items[i];
-      var fp = a.fileProperties || {};
-      var url = fp.publishedURL || fp.url || "";
-      items.push({
-        id          : a.id,
-        name        : a.name,
-        description : a.description,
-        categoryId  : a.category ? a.category.id : null,
-        modifiedDate: a.modifiedDate,
-        createdDate : a.createdDate,
-        size        : fp.fileSize || null,
-        url         : url,
-        thumbnail   : a.thumbnailUrl || url
-      });
-    }
-  }
+  var total = result.count;
+  var rawCount = (result.raw && typeof result.raw.count === "number") ? result.raw.count : null;
 
   respond({
     ok:true,
-    count: resp.data && resp.data.count ? resp.data.count : items.length,
-    page: page, pageSize: pageSize,
-    items: items,
-    raw: resp.data
+    count: total,
+    rawCount: rawCount,
+    displayCount: result.count,
+    page: page,
+    pageSize: pageSize,
+    items: result.items,
+    raw: result.raw,
+    fallbackUsed: result.fallback === true,
+    actualPage: result.pageUsed,
+    actualPageSize: result.pageSizeUsed,
+    statusCode: result.statusCode
   });
 }
 
@@ -131,6 +311,14 @@ function actionAssetsQuery(qs, body){
 function actionList(qs){
   var token = getToken();
   var term  = qs.searchTerm || "";
+  var result = queryAssets(token, {
+    page: 1,
+    pageSize: 50,
+    searchText: term,
+    orderBy: "modifiedDate",
+    orderDir: "DESC",
+    allowFallback: true
+  });
 
   var payload = {
     page:1, pageSize:50,
@@ -144,14 +332,15 @@ function actionList(qs){
     sort:[{ Property:"modifiedDate", Direction:"DESC" }]
   };
 
-  var resp = httpPostJson(REST_BASE + "asset/v1/content/assets/query", token, payload);
-  var out  = (resp.data && resp.data.items ? resp.data.items : []).map(function(a){
-    var fp = a.fileProperties || {};
-    var url = fp.publishedURL || fp.url || "";
-    return { name:a.name || "", url:url, thumbnail:a.thumbnailUrl || url };
+  respond({
+    ok:true,
+    items: out,
+    fallbackUsed: result.fallback === true,
+    actualPage: result.pageUsed,
+    actualPageSize: result.pageSizeUsed,
+    statusCode: result.statusCode,
+    rawCount: (result.raw && typeof result.raw.count === "number") ? result.raw.count : null
   });
-
-  respond({ ok:true, items: out });
 }
 
 // ---- Router ----
