@@ -1,0 +1,172 @@
+<script runat="server">
+Platform.Load("Core","1");
+
+// ---- Config: Installed Package + Endpoints (move to Page Params or DE in prod) ----
+var CLIENT_ID     = "2oyngecan2uk5dca02wsx1j8";
+var CLIENT_SECRET = "wzAsKhoKIMcfSszFQUd5UQxf";
+var AUTH_BASE     = "https://mcps4dq7y851bybsng90p082fjq0.auth.marketingcloudapis.com/";
+var REST_BASE     = "https://mcps4dq7y851bybsng90p082fjq0.rest.marketingcloudapis.com/";
+
+// ---- Helpers ----
+function respond(obj){
+  Platform.Response.SetResponseHeader("Content-Type","application/json");
+  Write(Stringify(obj));
+}
+
+function getJsonSafe(raw){
+  try { return Platform.Function.ParseJSON(String(raw || "{}")); } catch(e){ return {}; }
+}
+
+function getToken(){
+  var payload = {
+    grant_type   : "client_credentials",
+    client_id    : CLIENT_ID,
+    client_secret: CLIENT_SECRET
+    // ,account_id: "<MID-optional>"
+  };
+  var r = HTTP.Post(AUTH_BASE + "v2/token", "application/json", Stringify(payload));
+  if (r.StatusCode >= 200 && r.StatusCode < 300){
+    var data = getJsonSafe(r.Response);
+    if (data && data.access_token) return data.access_token;
+  }
+  throw "Auth failed (" + r.StatusCode + "): " + String(r.Response);
+}
+
+function httpGetJson(url, token){
+  var r = HTTP.Get(url, ["Authorization"], ["Bearer " + token]);
+  return { code:r.StatusCode, data:getJsonSafe(r.Content) };
+}
+
+function httpPostJson(url, token, bodyObj){
+  var r = HTTP.Post(url, "application/json", Stringify(bodyObj), ["Authorization"], ["Bearer " + token]);
+  return { code:r.StatusCode, data:getJsonSafe(r.Content) };
+}
+
+// Build advanced query nodes
+function cond(prop, op, val){ return { Property:prop, SimpleOperator:op, Value:val }; }
+function AND(a,b){ return { LeftOperand:a, LogicalOperator:"AND", RightOperand:b }; }
+function OR(a,b){  return { LeftOperand:a, LogicalOperator:"OR",  RightOperand:b }; }
+
+// ---- Actions ----
+function actionFolders(qs, body){
+  var parentId = qs.parentId; if (parentId === undefined) parentId = body.parentId;
+  if (parentId === "" || parentId === null || parentId === undefined) parentId = 0;
+
+  var page     = parseInt(qs.$page     || body.page     || 1,10);
+  var pageSize = parseInt(qs.$pagesize || body.pageSize || 200,10);
+
+  var token = getToken();
+  var url = REST_BASE + "asset/v1/content/categories?$page=" + page + "&$pagesize=" + pageSize + "&parentId=" + parentId;
+  var resp = httpGetJson(url, token);
+
+  respond({
+    ok:true,
+    items: (resp.data && resp.data.items) ? resp.data.items : [],
+    raw: resp.data
+  });
+}
+
+function actionAssetsQuery(qs, body){
+  var token    = getToken();
+  var page     = body.page     || 1;
+  var pageSize = body.pageSize || 24;
+  var search   = body.searchText || "";
+  var catId    = (body.categoryId !== undefined && body.categoryId !== "") ? body.categoryId : null;
+  var orderBy  = body.orderBy || "modifiedDate";
+  var orderDir = body.orderDir || "DESC";
+
+  // Base: images only
+  var root = cond("assetType.displayName","equals","image");
+
+  // Optional: folder filter
+  if (catId !== null){ root = AND(root, cond("category.id","equals", String(catId))); }
+
+  // Optional: search in name OR description
+  if (search && search.length){
+    var like = "%" + search + "%";
+    root = AND(root, OR(cond("name","like", like), cond("description","like", like)));
+  }
+
+  var payload = {
+    page    : page,
+    pageSize: pageSize,
+    query   : root,
+    sort    : [{ Property: orderBy, Direction: orderDir }]
+  };
+
+  var resp  = httpPostJson(REST_BASE + "asset/v1/content/assets/query", token, payload);
+  var items = [];
+  if (resp.data && resp.data.items){
+    for (var i=0;i<resp.data.items.length;i++){
+      var a  = resp.data.items[i];
+      var fp = a.fileProperties || {};
+      var url = fp.publishedURL || fp.url || "";
+      items.push({
+        id          : a.id,
+        name        : a.name,
+        description : a.description,
+        categoryId  : a.category ? a.category.id : null,
+        modifiedDate: a.modifiedDate,
+        createdDate : a.createdDate,
+        size        : fp.fileSize || null,
+        url         : url,
+        thumbnail   : a.thumbnailUrl || url
+      });
+    }
+  }
+
+  respond({
+    ok:true,
+    count: resp.data && resp.data.count ? resp.data.count : items.length,
+    page: page, pageSize: pageSize,
+    items: items,
+    raw: resp.data
+  });
+}
+
+// Back-compat: simple list for your existing searchLibrary(term) calls
+function actionList(qs){
+  var token = getToken();
+  var term  = qs.searchTerm || "";
+
+  var payload = {
+    page:1, pageSize:50,
+    query: AND(
+      cond("assetType.displayName","equals","image"),
+      OR(cond("name","like","%" + term + "%"), cond("description","like","%" + term + "%"))
+    ),
+    sort:[{ Property:"modifiedDate", Direction:"DESC" }]
+  };
+
+  var resp = httpPostJson(REST_BASE + "asset/v1/content/assets/query", token, payload);
+  var out  = (resp.data && resp.data.items ? resp.data.items : []).map(function(a){
+    var fp = a.fileProperties || {};
+    var url = fp.publishedURL || fp.url || "";
+    return { name:a.name || "", url:url, thumbnail:a.thumbnailUrl || url };
+  });
+
+  respond({ ok:true, items: out });
+}
+
+// ---- Router ----
+try {
+  var action  = Request.GetQueryStringParameter("action");
+  var bodyRaw = Platform.Request.GetPostData();
+  var body    = getJsonSafe(bodyRaw);
+  var qs      = {
+    parentId : Request.GetQueryStringParameter("parentId"),
+    $page    : Request.GetQueryStringParameter("$page"),
+    $pagesize: Request.GetQueryStringParameter("$pagesize"),
+    searchTerm: Request.GetQueryStringParameter("searchTerm")
+  };
+
+  if      (action === "folders")     actionFolders(qs, body);
+  else if (action === "assetsQuery") actionAssetsQuery(qs, body);
+  else if (action === "list")        actionList(qs);
+  else {
+    respond({ ok:false, error:"Invalid action. Use one of: folders, assetsQuery, list." });
+  }
+} catch(err){
+  respond({ ok:false, error: String(err) });
+}
+</script>
